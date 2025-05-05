@@ -1,0 +1,160 @@
+name: Reusable Unity Build and Deploy to Itch
+
+on:
+  workflow_call:
+    inputs:
+      unity_version:
+        required: true
+        type: string
+      itch_io_username:
+        required: true
+        type: string
+      itch_io_game_name:
+        required: true
+        type: string
+    secrets:
+      UNITY_LICENSE:
+        required: true
+      UNITY_EMAIL:
+        required: true
+      UNITY_PASSWORD:
+        required: true
+      ITCH_IO_API_KEY:
+        required: true
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Cache Unity Library
+        uses: actions/cache@v3
+        with:
+          path: |
+            **/Library
+            **/Temp
+            **/Obj
+            **/Logs
+          key: ${{ runner.os }}-unity-${{ hashFiles('**/Packages/manifest.json') }}
+          restore-keys: ${{ runner.os }}-unity-
+
+      - name: Build Windows
+        uses: game-ci/unity-builder@v4
+        with:
+          targetPlatform: StandaloneWindows64
+          unityVersion: ${{ inputs.unity_version }}
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+
+      - name: Upload Windows Build
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows-Build
+          path: build/StandaloneWindows64
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Cache Unity Library
+        uses: actions/cache@v3
+        with:
+          path: |
+            **/Library
+            **/Temp
+            **/Obj
+            **/Logs
+          key: ${{ runner.os }}-unity-${{ hashFiles('**/Packages/manifest.json') }}
+          restore-keys: ${{ runner.os }}-unity-
+
+      - name: Build macOS
+        uses: game-ci/unity-builder@v4
+        with:
+          targetPlatform: StandaloneOSX
+          unityVersion: ${{ inputs.unity_version }}
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+
+      - name: Rename Build
+        run: |
+          mkdir -p "build/${{ inputs.itch_io_game_name }}"
+          mv "build/StandaloneOSX/StandaloneOSX.app" "build/${{ inputs.itch_io_game_name }}/${{ inputs.itch_io_game_name }}.app"
+
+      - name: Upload macOS Build
+        uses: actions/upload-artifact@v4
+        with:
+          name: MacOS-Build
+          path: "build/${{ inputs.itch_io_game_name }}"
+
+  build-webgl:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Cache Unity Library
+        uses: actions/cache@v3
+        with:
+          path: |
+            **/Library
+            **/Temp
+            **/Obj
+            **/Logs
+          key: ${{ runner.os }}-unity-${{ hashFiles('**/Packages/manifest.json') }}
+          restore-keys: ${{ runner.os }}-unity-
+
+      - name: Build WebGL
+        uses: game-ci/unity-builder@v4
+        with:
+          targetPlatform: WebGL
+          unityVersion: ${{ inputs.unity_version }}
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+
+      - name: Upload WebGL Build
+        uses: actions/upload-artifact@v4
+        with:
+          name: WebGL-Build
+          path: build/WebGL
+
+  deploy-itch:
+    needs: [build-windows, build-macos, build-webgl]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Builds
+        uses: actions/download-artifact@v4
+        with:
+          path: build
+
+      - name: Install butler
+        run: |
+          curl -L -o butler.zip https://broth.itch.ovh/butler/linux-amd64/LATEST/archive/default
+          unzip butler.zip
+          chmod +x butler
+          sudo mv butler /usr/local/bin/
+
+      - name: Deploy to itch.io
+        run: |
+          butler push build/Windows-Build $ITCH_IO_USERNAME/$ITCH_IO_GAME_NAME:windows
+          butler push build/MacOS-Build $ITCH_IO_USERNAME/$ITCH_IO_GAME_NAME:macos
+          butler push build/WebGL-Build $ITCH_IO_USERNAME/$ITCH_IO_GAME_NAME:html
+        env:
+          BUTLER_API_KEY: ${{ secrets.ITCH_IO_API_KEY }}
+          ITCH_IO_USERNAME: ${{ inputs.itch_io_username }}
+          ITCH_IO_GAME_NAME: ${{ inputs.itch_io_game_name }}
